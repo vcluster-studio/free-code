@@ -2,6 +2,7 @@
  * Shared utilities for spawning teammates across different backends.
  */
 
+import { existsSync } from 'fs'
 import {
   getChromeFlagOverride,
   getFlagSettingsPath,
@@ -17,14 +18,38 @@ import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
 
 /**
  * Gets the command to use for spawning teammate processes.
- * Uses TEAMMATE_COMMAND_ENV_VAR if set, otherwise falls back to the
- * current process executable path.
+ * Uses multiple fallback strategies:
+ * 1. TEAMMATE_COMMAND_ENV_VAR if set (user override)
+ * 2. process.argv[0] if in bundled mode and the file exists (actual exe path)
+ * 3. process.execPath as fallback (may be virtual bunfs path in some Bun versions)
+ * 4. process.argv[1] for non-bundled mode (script path)
  */
 export function getTeammateCommand(): string {
+  // 1. User-provided override via environment variable
   if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
-  return isInBundledMode() ? process.execPath : process.argv[1]!
+
+  if (isInBundledMode()) {
+    // 2. process.argv[0] should be the actual executable path on disk
+    // This works in most cases when running compiled binaries
+    const argv0 = process.argv[0]
+    if (argv0 && existsSync(argv0)) {
+      return argv0
+    }
+
+    // 3. Fallback to process.execPath (may return virtual /$bunfs/root/... path
+    // in some Bun versions, but could work in others)
+    if (process.execPath && existsSync(process.execPath)) {
+      return process.execPath
+    }
+
+    // If neither exists, return argv[0] anyway and hope it works
+    return argv0 ?? process.execPath
+  }
+
+  // 4. Non-bundled mode: use script path
+  return process.argv[1]!
 }
 
 /**

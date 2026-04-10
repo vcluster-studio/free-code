@@ -3,6 +3,7 @@
  * Extracted from TeammateTool to allow reuse by AgentTool.
  */
 
+import { existsSync } from 'fs'
 import React from 'react'
 import {
   getChromeFlagOverride,
@@ -187,14 +188,36 @@ async function ensureSession(sessionName: string): Promise<void> {
 
 /**
  * Gets the command to spawn a teammate.
- * For native builds (compiled binaries), use process.execPath.
- * For non-native (node/bun running a script), use process.argv[1].
+ * Uses multiple fallback strategies:
+ * 1. TEAMMATE_COMMAND_ENV_VAR if set (user override)
+ * 2. process.argv[0] if in bundled mode and the file exists (actual exe path)
+ * 3. process.execPath as fallback (may be virtual bunfs path in some Bun versions)
+ * 4. process.argv[1] for non-bundled mode (script path)
  */
 function getTeammateCommand(): string {
+  // 1. User-provided override via environment variable
   if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
-  return isInBundledMode() ? process.execPath : process.argv[1]!
+
+  if (isInBundledMode()) {
+    // 2. process.argv[0] should be the actual executable path on disk
+    const argv0 = process.argv[0]
+    if (argv0 && existsSync(argv0)) {
+      return argv0
+    }
+
+    // 3. Fallback to process.execPath
+    if (process.execPath && existsSync(process.execPath)) {
+      return process.execPath
+    }
+
+    // If neither exists, return argv[0] anyway
+    return argv0 ?? process.execPath
+  }
+
+  // 4. Non-bundled mode: use script path
+  return process.argv[1]!
 }
 
 /**
