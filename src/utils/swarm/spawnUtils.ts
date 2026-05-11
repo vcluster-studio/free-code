@@ -171,11 +171,19 @@ const TEAMMATE_ENV_VARS = [
  * Builds the `env KEY=VALUE ...` string for teammate spawn commands.
  * Always includes CLAUDECODE=1 and CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1,
  * plus any provider/config env vars that are set in the current process.
+ * Also always sets TEAMMATE_COMMAND to ensure teammates use the correct
+ * binary path, avoiding broken bunfs virtual paths on Windows/Bun.
  */
 export function buildInheritedEnvVars(): string {
   const envVars = ['CLAUDECODE=1', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1']
 
+  // Always set TEAMMATE_COMMAND so teammates inherit the correct binary path
+  // This avoids repeated PATH lookups or broken bunfs virtual paths
+  envVars.push(`${TEAMMATE_COMMAND_ENV_VAR}=${quote([getTeammateCommand()])}`)
+
   for (const key of TEAMMATE_ENV_VARS) {
+    // Skip TEAMMATE_COMMAND_ENV_VAR since we already set it above
+    if (key === TEAMMATE_COMMAND_ENV_VAR) continue
     const value = process.env[key]
     if (value !== undefined && value !== '') {
       envVars.push(`${key}=${quote([value])}`)
