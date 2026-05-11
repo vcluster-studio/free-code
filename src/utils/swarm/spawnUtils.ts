@@ -3,6 +3,7 @@
  */
 
 import { existsSync } from 'fs'
+import { basename } from 'node:path'
 import {
   getChromeFlagOverride,
   getFlagSettingsPath,
@@ -13,6 +14,7 @@ import {
 import { quote } from '../bash/shellQuote.js'
 import { isInBundledMode } from '../bundledMode.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
+import { whichSync } from '../which.js'
 import { getTeammateModeFromSnapshot } from './backends/teammateModeSnapshot.js'
 import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
 
@@ -22,7 +24,8 @@ import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
  * 1. TEAMMATE_COMMAND_ENV_VAR if set (user override)
  * 2. process.argv[0] if in bundled mode and the file exists (actual exe path)
  * 3. process.execPath as fallback (may be virtual bunfs path in some Bun versions)
- * 4. process.argv[1] for non-bundled mode (script path)
+ * 4. PATH lookup by basename if previous paths don't exist on disk
+ * 5. process.argv[1] for non-bundled mode (script path)
  */
 export function getTeammateCommand(): string {
   // 1. User-provided override via environment variable
@@ -32,7 +35,6 @@ export function getTeammateCommand(): string {
 
   if (isInBundledMode()) {
     // 2. process.argv[0] should be the actual executable path on disk
-    // This works in most cases when running compiled binaries
     const argv0 = process.argv[0]
     if (argv0 && existsSync(argv0)) {
       return argv0
@@ -44,11 +46,20 @@ export function getTeammateCommand(): string {
       return process.execPath
     }
 
-    // If neither exists, return argv[0] anyway and hope it works
-    return argv0 ?? process.execPath
+    // 4. PATH lookup: extract basename and search PATH directories.
+    // Handles the common case where the binary is installed to /usr/bin etc.
+    // and process.argv[0] is just the bare name (not a resolvable path).
+    const name = basename(argv0 ?? process.execPath)
+    const resolved = whichSync(name)
+    if (resolved) {
+      return resolved
+    }
+
+    // If nothing works, return the bare name and rely on shell PATH lookup
+    return name
   }
 
-  // 4. Non-bundled mode: use script path
+  // 5. Non-bundled mode: use script path
   return process.argv[1]!
 }
 
@@ -128,6 +139,10 @@ const TEAMMATE_ENV_VARS = [
   'ANTHROPIC_BASE_URL',
   // Config directory override
   'CLAUDE_CONFIG_DIR',
+  // Teammate command override — without this, teammates fall back to
+  // broken bunfs virtual paths (/$bunfs/root/...) when spawning their own
+  // sub-agents (GitHub issue #23561)
+  'CLAUDE_CODE_TEAMMATE_COMMAND',
   // CCR marker — teammates need this for CCR-aware code paths. Auth finds
   // its own way via /home/claude/.claude/remote/.oauth_token regardless;
   // the FD env var wouldn't help (pipe FDs don't cross tmux).

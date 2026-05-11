@@ -4,6 +4,7 @@
  */
 
 import { existsSync } from 'fs'
+import { basename } from 'node:path'
 import React from 'react'
 import {
   getChromeFlagOverride,
@@ -28,6 +29,7 @@ import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { parseUserSpecifiedModel } from '../../utils/model/model.js'
 import type { PermissionMode } from '../../utils/permissions/PermissionMode.js'
 import { isTmuxAvailable } from '../../utils/swarm/backends/detection.js'
+import { whichSync } from '../../utils/which.js'
 import {
   detectAndGetBackend,
   getBackendByType,
@@ -192,7 +194,8 @@ async function ensureSession(sessionName: string): Promise<void> {
  * 1. TEAMMATE_COMMAND_ENV_VAR if set (user override)
  * 2. process.argv[0] if in bundled mode and the file exists (actual exe path)
  * 3. process.execPath as fallback (may be virtual bunfs path in some Bun versions)
- * 4. process.argv[1] for non-bundled mode (script path)
+ * 4. PATH lookup by basename if previous paths don't exist on disk
+ * 5. process.argv[1] for non-bundled mode (script path)
  */
 function getTeammateCommand(): string {
   // 1. User-provided override via environment variable
@@ -212,11 +215,20 @@ function getTeammateCommand(): string {
       return process.execPath
     }
 
-    // If neither exists, return argv[0] anyway
-    return argv0 ?? process.execPath
+    // 4. PATH lookup: extract basename and search PATH directories.
+    // Handles the common case where the binary is installed to /usr/bin etc.
+    // and process.argv[0] is just the bare name (not a resolvable path).
+    const name = basename(argv0 ?? process.execPath)
+    const resolved = whichSync(name)
+    if (resolved) {
+      return resolved
+    }
+
+    // If nothing works, return the bare name and rely on shell PATH lookup
+    return name
   }
 
-  // 4. Non-bundled mode: use script path
+  // 5. Non-bundled mode: use script path
   return process.argv[1]!
 }
 
