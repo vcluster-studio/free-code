@@ -2,3 +2,5 @@ node_modules/
 dist/
 cli-dev
 openclaw/
+.idea/
+.claude/
