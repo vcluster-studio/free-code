@@ -80,3 +80,16 @@ export const which: (command: string) => Promise<string | null> = bunWhich
  */
 export const whichSync: (command: string) => string | null =
   bunWhich ?? whichNodeSync
+
+/**
+ * Synchronous `which` that always searches the real filesystem,
+ * bypassing Bun's virtual filesystem (/$bunfs/...).
+ *
+ * In compiled Bun binaries, Bun.which() resolves commands from the
+ * virtual filesystem first, returning paths like /$bunfs/root/<name>
+ * that aren't resolvable by external shells (e.g. tmux panes).
+ * This function always uses the OS `which` command, which only
+ * searches real filesystem paths.
+ */
+export const whichSyncOnRealFS: (command: string) => string | null =
+  whichNodeSync

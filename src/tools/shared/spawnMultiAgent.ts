@@ -20,7 +20,6 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js'
 import { formatAgentId } from '../../utils/agentId.js'
 import { quote } from '../../utils/bash/shellQuote.js'
-import { isInBundledMode } from '../../utils/bundledMode.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -29,7 +28,7 @@ import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { parseUserSpecifiedModel } from '../../utils/model/model.js'
 import type { PermissionMode } from '../../utils/permissions/PermissionMode.js'
 import { isTmuxAvailable } from '../../utils/swarm/backends/detection.js'
-import { whichSync } from '../../utils/which.js'
+import { whichSyncOnRealFS } from '../../utils/which.js'
 import {
   detectAndGetBackend,
   getBackendByType,
@@ -190,46 +189,44 @@ async function ensureSession(sessionName: string): Promise<void> {
 
 /**
  * Gets the command to spawn a teammate.
- * Uses multiple fallback strategies:
- * 1. TEAMMATE_COMMAND_ENV_VAR if set (user override)
- * 2. process.argv[0] if in bundled mode and the file exists (actual exe path)
- * 3. process.execPath as fallback (may be virtual bunfs path in some Bun versions)
- * 4. PATH lookup by basename if previous paths don't exist on disk
- * 5. process.argv[1] for non-bundled mode (script path)
+ * Returns a path that is resolvable by real shells (e.g. tmux panes),
+ * skipping Bun virtual filesystem paths (/$bunfs/...).
  */
+/** Returns true if the path is a Bun virtual filesystem path that won't be
+ * resolvable by external shells (e.g. tmux panes). Bun's existsSync sees
+ * these inside the VFS, but real shells cannot resolve /$bunfs/root/... */
+function isBunfsPath(path: string): boolean {
+  return path.startsWith('/$bunfs/')
+}
+
 function getTeammateCommand(): string {
   // 1. User-provided override via environment variable
   if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
 
-  if (isInBundledMode()) {
-    // 2. process.argv[0] should be the actual executable path on disk
-    const argv0 = process.argv[0]
-    if (argv0 && existsSync(argv0)) {
-      return argv0
-    }
-
-    // 3. Fallback to process.execPath
-    if (process.execPath && existsSync(process.execPath)) {
-      return process.execPath
-    }
-
-    // 4. PATH lookup: extract basename and search PATH directories.
-    // Handles the common case where the binary is installed to /usr/bin etc.
-    // and process.argv[0] is just the bare name (not a resolvable path).
-    const name = basename(argv0 ?? process.execPath)
-    const resolved = whichSync(name)
-    if (resolved) {
-      return resolved
-    }
-
-    // If nothing works, return the bare name and rely on shell PATH lookup
-    return name
+  // 2. process.execPath is the actual executable path on the real filesystem.
+  // In Bun compiled binaries, this is the real path (e.g. /usr/bin/claude)
+  // even when argv[0]="bun" and argv[1]=/$bunfs/root/claude.
+  if (process.execPath && existsSync(process.execPath) && !isBunfsPath(process.execPath)) {
+    return process.execPath
   }
 
-  // 5. Non-bundled mode: use script path
-  return process.argv[1]!
+  // 3. argv[0] may be the actual executable path on disk
+  const argv0 = process.argv[0]
+  if (argv0 && existsSync(argv0) && !isBunfsPath(argv0)) {
+    return argv0
+  }
+
+  // 4. PATH lookup on the real filesystem (bypasses Bun.which VFS)
+  const name = basename(argv0 ?? process.execPath)
+  const resolved = whichSyncOnRealFS(name)
+  if (resolved) {
+    return resolved
+  }
+
+  // If nothing works, return the bare name and rely on shell PATH lookup
+  return name
 }
 
 /**
